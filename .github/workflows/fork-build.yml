@@ -1,0 +1,71 @@
+name: Fork build
+
+# Fork-only: tests the desktop font catalog on Windows and builds an unsigned installer.
+# Lives on build/** branches, never in the pull request branch.
+on:
+  push:
+    branches: ['build/**']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26.x
+      - uses: ./.github/actions/setup-bun
+        with:
+          cache-scope: desktop
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop -> target
+      - name: Generate icons and menu
+        shell: bash
+        run: |
+          bun run generate:icons --target desktop
+          bun run generate:tauri-menu
+      - name: Format
+        shell: bash
+        run: rustfmt --check --edition 2021 desktop/src/fonts/catalog.rs
+      - name: Font catalog tests
+        shell: bash
+        run: cargo test --manifest-path desktop/Cargo.toml --lib fonts
+
+  installer:
+    needs: test
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26.x
+      - uses: ./.github/actions/setup-bun
+        with:
+          cache-scope: desktop
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop -> target
+      - name: Build unsigned NSIS installer
+        shell: bash
+        run: |
+          echo '{"bundle":{"createUpdaterArtifacts":false}}' > fork-build.json
+          bun run tauri build --bundles nsis --config fork-build.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenPencil-fork-installer
+          path: desktop/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
